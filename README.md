@@ -9,6 +9,7 @@ Pulse-check your spending!
 - [Technologies](#technologies)
 - [How It Works](#how-it-works)
   - [Budget Monitoring Process](#budget-monitoring-process)
+  - [Spend Trajectory Extrapolation](#spend-trajectory-extrapolation)
   - [Encrypted Snapshot System](#encrypted-snapshot-system)
   - [Notification Delivery](#notification-delivery)
 - [Getting Started](#getting-started)
@@ -18,6 +19,7 @@ Pulse-check your spending!
       - [Required Variables](#required-variables)
       - [Actual Budget Configuration](#actual-budget-configuration)
       - [Notification Configuration](#notification-configuration)
+      - [Spend Trajectory Configuration](#spend-trajectory-configuration)
       - [Snapshot Configuration](#snapshot-configuration)
       - [Template Customization](#template-customization)
 - [Usage](#usage)
@@ -55,7 +57,27 @@ ActualNotify connects to your Actual Budget server and performs the following st
 2. **Calculate Spending**: For each category, calculates the remaining balance using `get_accumulated_budgeted_balance()`
 3. **Compute Usage**: Determines the percentage spent by comparing allocated vs. remaining amounts
 4. **Threshold Check**: Compares usage percentage against the configured threshold (default: 70%)
-5. **Notification Decision**: Sends notification only if threshold exceeded AND balance has changed since last run (unless `REPEAT_NOTIFY` is enabled)
+5. **Trajectory Check**: Optionally extrapolates current spend linearly to end of month (see [Spend Trajectory Extrapolation](#spend-trajectory-extrapolation))
+6. **Notification Decision**: Sends notification if the threshold is exceeded OR the spend trajectory is dangerous, AND the balance has changed since last run (unless `REPEAT_NOTIFY` is enabled)
+
+## Spend Trajectory Extrapolation
+
+In addition to the static threshold check, ActualNotify can project whether you are *on track* to exceed a category's budget before the month ends. This is useful for catching runaway spending early, before a category crosses the static threshold.
+
+The projection assumes spending continues linearly at the current pace:
+
+```
+projected_spend    = spent * (days_in_month / current_day)
+projected_fraction = projected_spend / total_budgeted
+```
+
+For example, if you have spent $250 of a $500 Groceries budget by day 10 of a 30-day month:
+
+- Current usage: **50%** (below a 70% threshold — would not trigger a normal warning)
+- Projected end-of-month spend: `$250 * (30 / 10) = $750` — **150%** of budget
+- If `ENABLE_SPEND_TRAJECTORY=1` and `TRAJECTORY_THRESHOLD=1.0`, a trajectory warning is sent
+
+Trajectory warnings only fire when the static threshold check has *not* already triggered, so you will never get a duplicate notification for the same category in one run. See [Spend Trajectory Configuration](#spend-trajectory-configuration) for the relevant environment variables.
 
 ## Encrypted Snapshot System
 
@@ -140,6 +162,25 @@ export REPEAT_NOTIFY="0"  # Only notify on changes
 export COMMAND_TO_RUN="ntfy publish budget-alerts"  # Example using ntfy
 ```
 
+#### Spend Trajectory Configuration
+
+Enable linear trajectory extrapolation to catch categories that are on pace to blow past their budget before month end, even when current usage is still below `BUDGET_WARNING_THRESHOLD`.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ENABLE_SPEND_TRAJECTORY` | If `1` or `true`, enable end-of-month spend extrapolation | `0` (false) |
+| `TRAJECTORY_THRESHOLD` | Decimal threshold (0.0-1.0+) for the *projected* end-of-month used fraction | `1.0` (100%) |
+
+Example:
+```bash
+export ENABLE_SPEND_TRAJECTORY="1"  # Enable trajectory warnings
+export TRAJECTORY_THRESHOLD="1.0"   # Warn if projected to reach 100% of budget by EOM
+```
+
+Setting `TRAJECTORY_THRESHOLD` below `1.0` makes trajectory warnings more aggressive (e.g. `0.9` warns if on pace to hit 90% by month end). Setting it above `1.0` delays the warning until the projected overshoot is more severe.
+
+**Note**: Trajectory warnings only fire when the static `BUDGET_WARNING_THRESHOLD` has not already been crossed, so they never produce a duplicate notification for the same category in a single run.
+
 #### Snapshot Configuration
 
 | Variable | Description | Default |
@@ -165,22 +206,35 @@ The template has access to these variables:
 - `spent` - Amount spent so far (Decimal)
 - `remaining` - Amount remaining (Decimal)
 - `used_fraction` - Decimal percentage spent (0.0-1.0+)
-- `THRESHOLD` - The configured threshold value
+- `THRESHOLD` - The configured static warning threshold
+- `projected_spend` - Linearly extrapolated end-of-month spend (Decimal)
+- `projected_fraction` - Extrapolated end-of-month used fraction (Decimal)
+- `trajectory_triggered` - `True` if the notification was triggered by the trajectory check rather than the static threshold
+- `current_day` - Current day of the month (1-31)
+- `days_in_month` - Number of days in the current month
 - `now` - Current date in ISO format
 
 **Default Template**:
 ```jinja2
-{% if used_fraction is defined and used_fraction >= THRESHOLD -%}
-Budget Warning: 
+{%- if trajectory_triggered -%}
+Budget Trajectory Warning:
+{%- elif used_fraction is defined and used_fraction >= THRESHOLD -%}
+Budget Warning:
 {%- else -%}
-Budget Notice: 
+Budget Notice:
 {%- endif -%}
 You have spent ${{ spent | float | round(2) }} out of ${{ total | float | round(2) }} ({{ (used_fraction * 100) | round(1) }}%) of your {{ category.name | default('general') }} budget.
+{%- if trajectory_triggered %} At current pace (day {{ current_day }} of {{ days_in_month }}), projected to spend ${{ projected_spend | float | round(2) }} ({{ (projected_fraction * 100) | round(1) }}%) by month end.{% endif %}
 ```
 
-This renders to 
+This renders to
 ```
-Budget Notice:You have spent 439.0 out of 500.0 (98.6%) of your Vehicle Maintenance budget.
+Budget Warning:You have spent 439.0 out of 500.0 (98.6%) of your Vehicle Maintenance budget.
+```
+
+Or, when triggered by trajectory extrapolation:
+```
+Budget Trajectory Warning:You have spent 250.0 out of 500.0 (50.0%) of your Groceries budget. At current pace (day 10 of 30), projected to spend 750.0 (150.0%) by month end.
 ```
 
 # Usage
@@ -244,6 +298,8 @@ WorkingDirectory=/path/to/ActualNotify
 Environment="ACTUAL_SERVER_URL=http://localhost:5006"
 Environment="ACTUAL_SERVER_PASSWORD=yourpassword"
 Environment="ACTUAL_SERVER_FILE=My Budget"
+Environment="ENABLE_SPEND_TRAJECTORY=1"
+Environment="TRAJECTORY_THRESHOLD=1.0"
 ExecStart=/usr/bin/poetry run python script.py
 ```
 

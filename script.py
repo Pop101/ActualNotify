@@ -1,5 +1,6 @@
 import os
 import logging
+import calendar
 from datetime import date
 from decimal import Decimal
 import json
@@ -28,18 +29,25 @@ ACTUAL_SERVER_FILE = os.getenv("ACTUAL_SERVER_FILE", "My Finances")
 THRESHOLD = Decimal(os.getenv("BUDGET_WARNING_THRESHOLD", "0.7"))
 REPEAT_NOTIFY = os.getenv("REPEAT_NOTIFY", "0").lower() in ("1", "true")
 
+# Linear spend trajectory extrapolation
+ENABLE_SPEND_TRAJECTORY = os.getenv("ENABLE_SPEND_TRAJECTORY", "0").lower() in ("1", "true")
+TRAJECTORY_THRESHOLD = Decimal(os.getenv("TRAJECTORY_THRESHOLD", "1.0"))
+
 # Snapshot file and repeat control
 SNAPSHOT_FILE = os.getenv("BUDGET_SNAPSHOT_FILE", "budget_snapshot.enc")
 
 # Notification command and template for stdin
 COMMAND_TO_RUN = os.getenv("COMMAND_TO_RUN", "")
 STDIN_TEMPLATE = Template(os.getenv("STDIN_TEMPLATE", r"""
-{%- if used_fraction is defined and used_fraction >= THRESHOLD -%}
-Budget Warning: 
+{%- if trajectory_triggered -%}
+Budget Trajectory Warning:
+{%- elif used_fraction is defined and used_fraction >= THRESHOLD -%}
+Budget Warning:
 {%- else -%}
-Budget Notice: 
+Budget Notice:
 {%- endif -%}
 You have spent ${{ spent | float | round(2) }} out of ${{ total | float | round(2) }} ({{ (used_fraction * 100) | round(1) }}%) of your {{ category.name | default('general') }} budget.
+{%- if trajectory_triggered %} At current pace (day {{ current_day }} of {{ days_in_month }}), projected to spend ${{ projected_spend | float | round(2) }} ({{ (projected_fraction * 100) | round(1) }}%) by month end.{% endif %}
 """.strip()))
 
 # Function to run command with stdin and stream output to logging
@@ -153,6 +161,10 @@ with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=AC
     prev_snapshot = load_snapshot()
     current_snapshot = {}
 
+    today = date.today()
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    current_day = today.day
+
     for budget in budgets:
         if budget.category_id is None:
             continue
@@ -172,16 +184,32 @@ with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=AC
         spent = total - remaining
         used_fraction = spent / total
 
+        # Linear trajectory: extrapolate current spend over remaining days
+        if current_day > 0 and spent > Decimal(0):
+            projected_spend = spent * Decimal(days_in_month) / Decimal(current_day)
+        else:
+            projected_spend = spent
+        projected_fraction = projected_spend / total if total > Decimal(0) else Decimal(0)
+
+        threshold_triggered = used_fraction >= THRESHOLD
+        trajectory_triggered = (
+            ENABLE_SPEND_TRAJECTORY
+            and not threshold_triggered
+            and projected_fraction >= TRAJECTORY_THRESHOLD
+        )
+        any_trigger = threshold_triggered or trajectory_triggered
+
         should_notify = REPEAT_NOTIFY or (prev_snapshot.get(category.id) != str(remaining))
         logging.info(
-            "Budget check: category '%s' spent %s of %s (%.1f%% used), notify: %s",
+            "Budget check: category '%s' spent %s of %s (%.1f%% used, %.1f%% projected by EOM), notify: %s",
             category.name,
             spent,
             total,
             float(used_fraction * 100),
+            float(projected_fraction * 100),
             should_notify,
         )
-        if used_fraction >= THRESHOLD and should_notify:
+        if any_trigger and should_notify:
             pct = float(used_fraction * 100)
             now = date.today().isoformat()
             rendered = STDIN_TEMPLATE.render(**locals())
