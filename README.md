@@ -1,10 +1,10 @@
 # ActualNotify
 
-Pulse-check your spending!
+Get an alert when spending approaches a category limit in Actual Budget.
 
-# Table of Contents
-- [ActualNotify](#actualnotify)
-- [Table of Contents](#table-of-contents)
+![ActualNotify project cover](.github/readme-cover.svg)
+
+## Table of Contents
 - [Overview](#overview)
 - [Technologies](#technologies)
 - [How It Works](#how-it-works)
@@ -35,19 +35,21 @@ Pulse-check your spending!
     - [Email (using mail command)](#email-using-mail-command)
     - [Custom Script](#custom-script)
 
-# Overview
+## Overview
+
+Use a trusted notification command and recipient: alerts can contain budget categories and amounts. With no command configured, alerts are logged locally.
 
 ActualNotify is a lightweight budget monitoring tool that sends notifications when your spending approaches category budget limits in Actual Budget. It queries your Actual Budget server, calculates spending percentages for each budget category, and sends customizable notifications through external commands or logging when thresholds are exceeded.
 
 The system includes an encrypted snapshot mechanism to prevent duplicate notifications and supports custom Jinja2 templates for notification formatting, making it ideal for integration with notification systems, chat platforms, or alerting services.
 
-# Technologies
+## Technologies
 This project is created with:
 - [ActualPy](https://actualpy.readthedocs.io/): 0.15-0.16
 - [Jinja2](https://jinja.palletsprojects.com/): 3.1.6
 - [Cryptography](https://cryptography.io/): (for encrypted snapshots)
 
-# How It Works
+## How It Works
 
 ## Budget Monitoring Process
 
@@ -99,7 +101,7 @@ Notifications are delivered via customizable external commands:
 4. **Error Handling**: Logs and raises exceptions if the command exits with a non-zero status
 5. **Fallback**: If no command is configured, logs the rendered notification message
 
-# Getting Started
+## Getting Started
 
 ## Installation
 
@@ -237,7 +239,7 @@ Or, when triggered by trajectory extrapolation:
 Budget Trajectory Warning:You have spent 250.0 out of 500.0 (50.0%) of your Groceries budget. At current pace (day 10 of 30), projected to spend 750.0 (150.0%) by month end.
 ```
 
-# Usage
+## Usage
 
 ## Running Manually
 
@@ -266,10 +268,10 @@ The script will:
 Add to your crontab (`crontab -e`):
 
 ```bash
-# Run every 6 hours
+## Run every 6 hours
 0 */6 * * * cd /path/to/ActualNotify && /usr/bin/poetry run python script.py >> /var/log/actualnotify.log 2>&1
 
-# Run daily at 9 AM
+## Run daily at 9 AM
 0 9 * * * cd /path/to/ActualNotify && /usr/bin/poetry run python script.py
 ```
 
